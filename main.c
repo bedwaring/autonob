@@ -3,6 +3,7 @@
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct {
@@ -62,6 +63,33 @@ static void generate_nob(FILE *out, const Anob_Target *target) {
   fputs("}\n", out);
 }
 
+static char *target_name = NULL;
+
+static char *copy_string(const char *s) {
+  size_t size = strlen(s) + 1;
+  char *copy = malloc(size);
+  assert(copy != NULL && "Buy more RAM lol");
+  memcpy(copy, s, size);
+  return copy;
+}
+
+static int l_executable(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TSTRING);
+  if (target_name != NULL)
+    return luaL_error(L, "only one executable is supported for now");
+  target_name = copy_string(lua_tostring(L, 1));
+  return 0;
+}
+
+static int luaopen_autonob(lua_State *L) {
+  static const luaL_Reg funcs[] = {
+      {"executable", l_executable},
+      {NULL, NULL},
+  };
+  luaL_newlib(L, funcs);
+  return 1;
+}
+
 static void print_usage(FILE *out, const char *program) {
   fprintf(out, "Usage: %s [-f <script>] <output-file>\n", program);
 }
@@ -99,9 +127,18 @@ int main(int argc, char **argv) {
   lua_State *L = luaL_newstate();
   assert(L != NULL && "Buy more RAM lol");
   luaL_openlibs(L);
+  luaL_requiref(L, "autonob", luaopen_autonob, 0);
+  lua_pop(L, 1);
+
   if (luaL_loadfile(L, script) != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
     fprintf(stderr, "error: %s\n", lua_tostring(L, -1));
     lua_close(L);
+    return 1;
+  }
+  lua_close(L);
+
+  if (target_name == NULL) {
+    fprintf(stderr, "error: %s did not call autonob.executable\n", script);
     return 1;
   }
 
@@ -109,7 +146,7 @@ int main(int argc, char **argv) {
   const char *sources[] = {"hello.c"};
   const char *compile_flags[] = {"-Wall", "-Wextra"};
   Anob_Target target = {
-      .name = "hello",
+      .name = target_name,
       .sources = sources,
       .source_count = sizeof(sources) / sizeof(sources[0]),
       .compile_flags = compile_flags,
@@ -119,7 +156,6 @@ int main(int argc, char **argv) {
   FILE *file = fopen(output_file, "w");
   if (file == NULL) {
     perror("fopen");
-    lua_close(L);
     return 1;
   }
   generate_nob(file, &target);
@@ -127,7 +163,6 @@ int main(int argc, char **argv) {
   int failed = ferror(file);
   if (fclose(file) != 0)
     failed = 1;
-  lua_close(L);
   if (failed) {
     fprintf(stderr, "error: could not write %s\n", output_file);
     return 1;
