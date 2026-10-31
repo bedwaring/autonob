@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
     return 1;
 
   Nob_File_Paths sources = {0};
-  nob_da_append(&sources, "main.c");
+  nob_da_append(&sources, "src/main.c");
 
   Nob_File_Paths lua_files = {0};
   if (!nob_read_entire_dir("thirdparty/lua", &lua_files))
