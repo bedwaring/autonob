@@ -90,12 +90,12 @@ static int l_executable(lua_State *L) {
 
   if (lua_getfield(L, 1, "sources") != LUA_TTABLE)
     return luaL_error(L, "executable: 'sources' must be a table");
-  size_t count = lua_rawlen(L, -1);
-  if (count == 0)
+  size_t source_count = lua_rawlen(L, -1);
+  if (source_count == 0)
     return luaL_error(L, "executable: 'sources' must not be empty");
 
-  const char **sources = xmalloc(count * sizeof(sources[0]));
-  for (size_t i = 0; i < count; i++) {
+  const char **sources = xmalloc(source_count * sizeof(sources[0]));
+  for (size_t i = 0; i < source_count; i++) {
     if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
       return luaL_error(L, "executable: sources[%d] must be a string",
                         (int)(i + 1));
@@ -104,7 +104,30 @@ static int l_executable(lua_State *L) {
   }
   lua_pop(L, 1);
   target.sources = sources;
-  target.source_count = count;
+  target.source_count = source_count;
+
+  int flags_type = lua_getfield(L, 1, "flags");
+  if (flags_type == LUA_TTABLE) {
+    size_t flags_count = lua_rawlen(L, -1);
+    const char **flags;
+    if (flags_count == 0)
+      flags = NULL;
+    else
+      flags = xmalloc(flags_count * sizeof(flags[0]));
+    for (size_t i = 0; i < flags_count; i++) {
+      if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
+        return luaL_error(L, "executable: flags[%d] must be a string",
+                          (int)(i + 1));
+
+      flags[i] = copy_string(lua_tostring(L, -1));
+      lua_pop(L, 1);
+    }
+    target.compile_flag_count = flags_count;
+    target.compile_flags = flags;
+  } else if (flags_type != LUA_TNIL) {
+    return luaL_error(L, "executable: 'flags' must be a table");
+  }
+  lua_pop(L, 1);
   return 0;
 }
 
@@ -168,11 +191,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "error: %s did not call autonob.executable\n", script);
     return 1;
   }
-
-  // temporary
-  const char *compile_flags[] = {"-Wall", "-Wextra"};
-  target.compile_flags = compile_flags;
-  target.compile_flag_count = sizeof(compile_flags) / sizeof(compile_flags[0]);
 
   FILE *file = fopen(output_file, "w");
   if (file == NULL) {
