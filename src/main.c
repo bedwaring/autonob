@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <dirent.h>
+#include <errno.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
@@ -131,9 +133,36 @@ static int l_executable(lua_State *L) {
   return 0;
 }
 
+static int l_dir(lua_State *L) {
+  const char *path = luaL_checkstring(L, 1);
+  DIR *dir = opendir(path);
+  if (dir == NULL)
+    return luaL_error(L, "dir: cannot open '%s': %s", path, strerror(errno));
+
+  lua_newtable(L);
+  lua_Integer count = 0;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+      continue;
+    lua_pushstring(L, entry->d_name);
+    lua_rawseti(L, -2, ++count);
+  }
+  closedir(dir);
+
+  // table.sort(names)
+  lua_getglobal(L, "table");
+  lua_getfield(L, -1, "sort");
+  lua_pushvalue(L, -3);
+  lua_call(L, 1, 0);
+  lua_pop(L, 1);
+  return 1;
+}
+
 static int luaopen_autonob(lua_State *L) {
   static const luaL_Reg funcs[] = {
       {"executable", l_executable},
+      {"dir", l_dir},
       {NULL, NULL},
   };
   luaL_newlib(L, funcs);
