@@ -14,6 +14,12 @@ typedef struct {
   size_t compile_flag_count;
 } Anob_Target;
 
+static void *xmalloc(size_t size) {
+  void *p = malloc(size);
+  assert(p != NULL && "Buy more RAM lol");
+  return p;
+}
+
 static void write_c_string(FILE *out, const char *s) {
   fputc('"', out);
   for (; *s != '\0'; s++) {
@@ -63,21 +69,42 @@ static void generate_nob(FILE *out, const Anob_Target *target) {
   fputs("}\n", out);
 }
 
-static char *target_name = NULL;
+static Anob_Target target = {0};
 
 static char *copy_string(const char *s) {
   size_t size = strlen(s) + 1;
-  char *copy = malloc(size);
-  assert(copy != NULL && "Buy more RAM lol");
+  char *copy = xmalloc(size);
   memcpy(copy, s, size);
   return copy;
 }
 
 static int l_executable(lua_State *L) {
-  luaL_checktype(L, 1, LUA_TSTRING);
-  if (target_name != NULL)
+  luaL_checktype(L, 1, LUA_TTABLE);
+  if (target.name != NULL)
     return luaL_error(L, "only one executable is supported for now");
-  target_name = copy_string(lua_tostring(L, 1));
+
+  if (lua_getfield(L, 1, "name") != LUA_TSTRING)
+    return luaL_error(L, "executable: 'name' must be a string");
+  target.name = copy_string(lua_tostring(L, -1));
+  lua_pop(L, 1);
+
+  if (lua_getfield(L, 1, "sources") != LUA_TTABLE)
+    return luaL_error(L, "executable: 'sources' must be a table");
+  size_t count = lua_rawlen(L, -1);
+  if (count == 0)
+    return luaL_error(L, "executable: 'sources' must not be empty");
+
+  const char **sources = xmalloc(count * sizeof(sources[0]));
+  for (size_t i = 0; i < count; i++) {
+    if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
+      return luaL_error(L, "executable: sources[%d] must be a string",
+                        (int)(i + 1));
+    sources[i] = copy_string(lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  target.sources = sources;
+  target.source_count = count;
   return 0;
 }
 
@@ -137,21 +164,15 @@ int main(int argc, char **argv) {
   }
   lua_close(L);
 
-  if (target_name == NULL) {
+  if (target.name == NULL) {
     fprintf(stderr, "error: %s did not call autonob.executable\n", script);
     return 1;
   }
 
   // temporary
-  const char *sources[] = {"hello.c"};
   const char *compile_flags[] = {"-Wall", "-Wextra"};
-  Anob_Target target = {
-      .name = target_name,
-      .sources = sources,
-      .source_count = sizeof(sources) / sizeof(sources[0]),
-      .compile_flags = compile_flags,
-      .compile_flag_count = sizeof(compile_flags) / sizeof(compile_flags[0]),
-  };
+  target.compile_flags = compile_flags;
+  target.compile_flag_count = sizeof(compile_flags) / sizeof(compile_flags[0]);
 
   FILE *file = fopen(output_file, "w");
   if (file == NULL) {
