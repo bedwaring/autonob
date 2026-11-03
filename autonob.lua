@@ -10,5 +10,6 @@ end
 autonob.executable({
   name = "autonob",
   sources = sources,
-  flags = {"-O2", "-std=c17", "-Ithirdparty/lua", "-lm"}
+  flags = {"-O2", "-std=c17", "-Ithirdparty/lua"},
+  libs = {autonob.posix("-lm")}
 })

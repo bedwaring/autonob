@@ -9,8 +9,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef enum {
+  ANOB_ALL,
+  ANOB_POSIX,
+  ANOB_WINDOWS,
+} Anob_Platform;
+
 typedef struct {
-  const char **items;
+  const char *value;
+  Anob_Platform platform;
+} Anob_Item;
+
+typedef struct {
+  Anob_Item *items;
   size_t count;
 } Anob_List;
 
@@ -39,9 +50,16 @@ static void write_c_string(FILE *out, const char *s) {
 
 static void write_appends(FILE *out, const Anob_List *list) {
   for (size_t i = 0; i < list->count; i++) {
+    const Anob_Item *item = &list->items[i];
+    if (item->platform == ANOB_POSIX)
+      fputs("#ifndef _WIN32\n", out);
+    else if (item->platform == ANOB_WINDOWS)
+      fputs("#ifdef _WIN32\n", out);
     fputs("    nob_cmd_append(&cmd, ", out);
-    write_c_string(out, list->items[i]);
+    write_c_string(out, item->value);
     fputs(");\n", out);
+    if (item->platform != ANOB_ALL)
+      fputs("#endif\n", out);
   }
 }
 
@@ -86,6 +104,27 @@ static char *copy_string(const char *s) {
   return copy;
 }
 
+static Anob_Item read_item(lua_State *L, const char *field, size_t index) {
+  Anob_Item item = {0};
+  int top = lua_gettop(L);
+  if (lua_type(L, -1) == LUA_TTABLE) {
+    lua_getfield(L, -1, "platform");
+    lua_getfield(L, -2, "value");
+    const char *platform = lua_tostring(L, -2);
+    if (platform != NULL && strcmp(platform, "posix") == 0)
+      item.platform = ANOB_POSIX;
+    else if (platform != NULL && strcmp(platform, "windows") == 0)
+      item.platform = ANOB_WINDOWS;
+    else
+      luaL_error(L, "executable: %s[%d] must be a string", field, (int)index);
+  }
+  if (lua_type(L, -1) != LUA_TSTRING)
+    luaL_error(L, "executable: %s[%d] must be a string", field, (int)index);
+  item.value = copy_string(lua_tostring(L, -1));
+  lua_settop(L, top);
+  return item;
+}
+
 static Anob_List read_list(lua_State *L, const char *field, bool required) {
   Anob_List list = {0};
   int type = lua_getfield(L, 1, field);
@@ -103,9 +142,8 @@ static Anob_List read_list(lua_State *L, const char *field, bool required) {
     list.items = xmalloc(list.count * sizeof(list.items[0]));
 
   for (size_t i = 0; i < list.count; i++) {
-    if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
-      luaL_error(L, "executable: %s[%d] must be a string", field, (int)(i + 1));
-    list.items[i] = copy_string(lua_tostring(L, -1));
+    lua_rawgeti(L, -1, i + 1);
+    list.items[i] = read_item(L, field, i + 1);
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
@@ -154,11 +192,24 @@ static int l_dir(lua_State *L) {
   return 1;
 }
 
+static int make_platform_value(lua_State *L, const char *platform) {
+  luaL_checktype(L, 1, LUA_TSTRING);
+  lua_createtable(L, 0, 2);
+  lua_pushvalue(L, 1);
+  lua_setfield(L, -2, "value");
+  lua_pushstring(L, platform);
+  lua_setfield(L, -2, "platform");
+  return 1;
+}
+
+static int l_posix(lua_State *L) { return make_platform_value(L, "posix"); }
+
+static int l_windows(lua_State *L) { return make_platform_value(L, "windows"); }
+
 static int luaopen_autonob(lua_State *L) {
   static const luaL_Reg funcs[] = {
-      {"executable", l_executable},
-      {"dir", l_dir},
-      {NULL, NULL},
+      {"executable", l_executable}, {"dir", l_dir}, {"posix", l_posix},
+      {"windows", l_windows},       {NULL, NULL},
   };
   luaL_newlib(L, funcs);
   return 1;
