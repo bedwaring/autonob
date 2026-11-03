@@ -4,16 +4,21 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {
+  const char **items;
+  size_t count;
+} Anob_List;
+
+typedef struct {
   const char *name;
-  const char **sources;
-  size_t source_count;
-  const char **compile_flags;
-  size_t compile_flag_count;
+  Anob_List sources;
+  Anob_List compile_flags;
+  Anob_List libs;
 } Anob_Target;
 
 static void *xmalloc(size_t size) {
@@ -32,10 +37,10 @@ static void write_c_string(FILE *out, const char *s) {
   fputc('"', out);
 }
 
-static void write_appends(FILE *out, const char **items, size_t count) {
-  for (size_t i = 0; i < count; i++) {
+static void write_appends(FILE *out, const Anob_List *list) {
+  for (size_t i = 0; i < list->count; i++) {
     fputs("    nob_cmd_append(&cmd, ", out);
-    write_c_string(out, items[i]);
+    write_c_string(out, list->items[i]);
     fputs(");\n", out);
   }
 }
@@ -61,8 +66,9 @@ static void generate_nob(FILE *out, const Anob_Target *target) {
   fputs("\n", out);
   fputs("    Nob_Cmd cmd = {0};\n", out);
   fputs("    nob_cmd_append(&cmd, cc);\n", out);
-  write_appends(out, target->compile_flags, target->compile_flag_count);
-  write_appends(out, target->sources, target->source_count);
+  write_appends(out, &target->compile_flags);
+  write_appends(out, &target->sources);
+  write_appends(out, &target->libs);
   fputs("    nob_cmd_append(&cmd, \"-o\", ", out);
   write_c_string(out, target->name);
   fputs(" EXE_SUFFIX);\n", out);
@@ -80,6 +86,32 @@ static char *copy_string(const char *s) {
   return copy;
 }
 
+static Anob_List read_list(lua_State *L, const char *field, bool required) {
+  Anob_List list = {0};
+  int type = lua_getfield(L, 1, field);
+  if (type == LUA_TNIL && !required) {
+    lua_pop(L, 1);
+    return list;
+  }
+  if (type != LUA_TTABLE)
+    luaL_error(L, "executable: '%s' must be a table", field);
+
+  list.count = lua_rawlen(L, -1);
+  if (list.count == 0 && required)
+    luaL_error(L, "executable: '%s' must not be empty", field);
+  if (list.count > 0)
+    list.items = xmalloc(list.count * sizeof(list.items[0]));
+
+  for (size_t i = 0; i < list.count; i++) {
+    if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
+      luaL_error(L, "executable: %s[%d] must be a string", field, (int)(i + 1));
+    list.items[i] = copy_string(lua_tostring(L, -1));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  return list;
+}
+
 static int l_executable(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   if (target.name != NULL)
@@ -90,46 +122,9 @@ static int l_executable(lua_State *L) {
   target.name = copy_string(lua_tostring(L, -1));
   lua_pop(L, 1);
 
-  if (lua_getfield(L, 1, "sources") != LUA_TTABLE)
-    return luaL_error(L, "executable: 'sources' must be a table");
-  size_t source_count = lua_rawlen(L, -1);
-  if (source_count == 0)
-    return luaL_error(L, "executable: 'sources' must not be empty");
-
-  const char **sources = xmalloc(source_count * sizeof(sources[0]));
-  for (size_t i = 0; i < source_count; i++) {
-    if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
-      return luaL_error(L, "executable: sources[%d] must be a string",
-                        (int)(i + 1));
-    sources[i] = copy_string(lua_tostring(L, -1));
-    lua_pop(L, 1);
-  }
-  lua_pop(L, 1);
-  target.sources = sources;
-  target.source_count = source_count;
-
-  int flags_type = lua_getfield(L, 1, "flags");
-  if (flags_type == LUA_TTABLE) {
-    size_t flags_count = lua_rawlen(L, -1);
-    const char **flags;
-    if (flags_count == 0)
-      flags = NULL;
-    else
-      flags = xmalloc(flags_count * sizeof(flags[0]));
-    for (size_t i = 0; i < flags_count; i++) {
-      if (lua_rawgeti(L, -1, i + 1) != LUA_TSTRING)
-        return luaL_error(L, "executable: flags[%d] must be a string",
-                          (int)(i + 1));
-
-      flags[i] = copy_string(lua_tostring(L, -1));
-      lua_pop(L, 1);
-    }
-    target.compile_flag_count = flags_count;
-    target.compile_flags = flags;
-  } else if (flags_type != LUA_TNIL) {
-    return luaL_error(L, "executable: 'flags' must be a table");
-  }
-  lua_pop(L, 1);
+  target.sources = read_list(L, "sources", true);
+  target.compile_flags = read_list(L, "flags", false);
+  target.libs = read_list(L, "libs", false);
   return 0;
 }
 
