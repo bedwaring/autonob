@@ -255,12 +255,12 @@ int main(int argc, char **argv) {
   luaL_requiref(L, "autonob", luaopen_autonob, 0);
   lua_pop(L, 1);
 
-  if (luaL_loadfile(L, script) != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
+  int script_failed = luaL_dofile(L, script);
+  if (script_failed)
     fprintf(stderr, "error: %s\n", lua_tostring(L, -1));
-    lua_close(L);
-    return 1;
-  }
   lua_close(L);
+  if (script_failed)
+    return 1;
 
   if (target.name == NULL) {
     fprintf(stderr, "error: %s did not call autonob.executable\n", script);
